@@ -21,16 +21,19 @@ function App() {
     }
   };
 
-  const pollJobStatus = async (requestId) => {
-    const maxAttempts = 120;
-    let attempts = 0;
+  const listenForUpdates = (requestId) => {
+    const eventSource = new EventSource(`http://localhost:3000/api/events/${requestId}`);
 
-    while (attempts < maxAttempts) {
+    eventSource.onmessage = (event) => {
       try {
-        const response = await fetch(`http://localhost:3000/api/job-status/${requestId}`);
-        const data = await response.json();
+        const data = JSON.parse(event.data);
+        console.log("SSE Event:", data);
 
-        console.log("Poll response:", data);
+        if (data.status === 'CONNECTED') {
+          setLogs(prev => [...prev, 'Connected to update stream...']);
+          setProgress('⏳ Waiting for result...');
+          return;
+        }
 
         if (data.state === 'COMPLETED') {
           setProgress(' Generation complete!');
@@ -38,33 +41,32 @@ function App() {
 
           if (data.video && data.video.url) {
             setResult(data.video.url);
-            return true;
           } else {
             setLogs(prev => [...prev, 'Warning: Video URL not found in response']);
-            return false;
+          }
+          eventSource.close();
+          setLoading(false);
+        } else if (data.state === 'FAILED') {
+          setLogs(prev => [...prev, `Error: ${data.error || 'Generation failed'}`]);
+          eventSource.close();
+          setLoading(false);
+        } else if (data.state === 'IN_PROGRESS' || data.state === 'QUEUED') {
+          setProgress(`⏳ Processing... (${data.state})`);
+          if (data.logs) {
           }
         }
 
-        if (data.state === 'FAILED') {
-          setLogs(prev => [...prev, `Error: ${data.error || 'Generation failed'}`]);
-          return false;
-        }
-
-        setProgress(`⏳ Processing... (${data.state || 'IN_PROGRESS'})`);
-
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        attempts++;
-
       } catch (error) {
-        console.error("Polling error:", error);
-        setLogs(prev => [...prev, `Polling error: ${error.message}`]);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        attempts++;
+        console.error("Error parsing SSE data:", error);
       }
-    }
+    };
 
-    setLogs(prev => [...prev, 'Timeout: Generation took too long']);
-    return false;
+    eventSource.onerror = (error) => {
+      console.error("SSE Error:", error);
+      setLogs(prev => [...prev, 'Connection to updates lost.']);
+      eventSource.close();
+      setLoading(false);
+    };
   };
 
   const generateVideo = async () => {
@@ -97,8 +99,6 @@ function App() {
       }
 
       const uploadData = await uploadResponse.json();
-      console.log("Upload response:", uploadData);
-
       const { image_url, video_url } = uploadData;
 
       if (!image_url || !video_url) {
@@ -135,15 +135,12 @@ function App() {
 
       setLogs(prev => [...prev, `Job queued with ID: ${queueData.request_id}`]);
 
-      setProgress('⏳ Generating video...');
-      await pollJobStatus(queueData.request_id);
+      // Start listening for SSE updates
+      listenForUpdates(queueData.request_id);
 
     } catch (error) {
       console.error("Error:", error);
-      const errorMessage = error.message || 'Unknown error occurred';
-      setLogs(prev => [...prev, `Error: ${errorMessage}`]);
-      setProgress('');
-    } finally {
+      setLogs(prev => [...prev, `Error: ${error.message}`]);
       setLoading(false);
     }
   };

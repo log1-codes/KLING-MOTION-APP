@@ -86,6 +86,7 @@ app.post('/api/generate-from-urls', async (req, res) => {
                 error: 'Both image_url and video_url are required',
             });
         }
+        const WEBHOOK_URL = 'https://handsomest-lanny-provocative.ngrok-free.dev/api/webhook';
 
         console.log('Submitting job to FAL queue...');
 
@@ -98,12 +99,13 @@ app.post('/api/generate-from-urls', async (req, res) => {
                     character_orientation: character_orientation || 'video',
                     prompt: prompt || ''
                 },
+                webhookUrl: WEBHOOK_URL
             }
         );
 
         res.json({
             request_id: submission.request_id,
-            state: 'QUEUED',
+            message: 'job started',
         });
     } catch (error) {
         console.error('Queue submission failed:', error);
@@ -114,56 +116,66 @@ app.post('/api/generate-from-urls', async (req, res) => {
 });
 
 
+// Store connected clients: requestId -> response object
+const clients = new Map();
 
+// SSE Endpoint for real-time updates
+app.get('/api/events/:requestId', (req, res) => {
+    const requestId = req.params.requestId;
+    console.log(`Client connected for updates: ${requestId}`);
 
-app.get('/api/job-status/:requestId', async (req, res) => {
-    try {
-        const requestId = req.params.requestId;
+    // Set headers for SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
 
-        console.log("Polling requestId:", requestId);
+    // Store the client connection
+    clients.set(requestId, res);
 
-        const status = await fal.queue.status('fal-ai/wan/v2.2-14b/animate/replace', {
-            requestId: requestId,
-            logs: true
-        });
+    // Send initial connection message
+    res.write(`data: ${JSON.stringify({ status: 'CONNECTED' })}\n\n`);
 
-        console.log("Status:", status.status);
+    // Remove client when connection closes
+    req.on('close', () => {
+        console.log(`Client disconnected: ${requestId}`);
+        clients.delete(requestId);
+    });
+});
 
-        if (status.status === 'COMPLETED') {
-            const response_url = status.response_url;
+app.post('/api/webhook', (req, res) => {
+    const data = req.body;
+    console.log("FAL SENT DATA:", JSON.stringify(data, null, 2));
 
-            console.log("Fetching result from:", response_url);
+    const requestId = data.request_id;
+    const client = clients.get(requestId);
 
-            const resultResponse = await fetch(response_url);
-            const resultData = await resultResponse.json();
+    if (client) {
+        if (data.status === 'COMPLETED' || data.status === 'OK') {
+            const videoUrl = data.payload.video.url;
+            console.log("SUCCESS! Video is at:", videoUrl);
 
-            console.log("Result data:", JSON.stringify(resultData, null, 2));
-
-            return res.json({
+            client.write(`data: ${JSON.stringify({
                 state: 'COMPLETED',
-                video: resultData.video,
-                metrics: status.metrics
-            });
-        }
-
-        if (status.status === 'FAILED' || status.status === 'ERROR') {
-            return res.status(500).json({
+                video: { url: videoUrl },
+                metrics: data.metrics
+            })}\n\n`);
+        } else if (data.status === 'IN_PROGRESS' || data.status === 'QUEUED') {
+            client.write(`data: ${JSON.stringify({
+                state: data.status,
+                logs: data.logs
+            })}\n\n`);
+        } else if (data.status === 'FAILED' || data.status === 'ERROR') {
+            client.write(`data: ${JSON.stringify({
                 state: 'FAILED',
-                error: status.error || 'Job failed',
-            });
+                error: data.error
+            })}\n\n`);
         }
-
-        res.json({
-            state: status.status || 'IN_PROGRESS',
-            logs: status.logs
-        });
-
-    } catch (error) {
-        console.error('Polling failed:', error);
-        res.status(500).json({
-            error: error.message || 'Failed to fetch job status',
-        });
+    } else {
+        console.log(`No active client found for request ${requestId}`);
     }
+
+    // You MUST send a 200 status back so Fal knows you got the message
+    res.status(200).send('Received');
 });
 
 
