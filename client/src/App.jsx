@@ -6,6 +6,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [progress, setProgress] = useState('');
 
   const handleImageChange = (e) => {
     if (e.target.files && e.target.files[0]) {
@@ -19,6 +20,52 @@ function App() {
     }
   };
 
+  const pollJobStatus = async (requestId) => {
+    const maxAttempts = 120;
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch(`http://localhost:3000/api/job-status/${requestId}`);
+        const data = await response.json();
+
+        console.log("Poll response:", data);
+
+        if (data.state === 'COMPLETED') {
+          setProgress(' Generation complete!');
+          setLogs(prev => [...prev, 'Video generated successfully!']);
+
+          if (data.video && data.video.url) {
+            setResult(data.video.url);
+            return true;
+          } else {
+            setLogs(prev => [...prev, 'Warning: Video URL not found in response']);
+            return false;
+          }
+        }
+
+        if (data.state === 'FAILED') {
+          setLogs(prev => [...prev, `Error: ${data.error || 'Generation failed'}`]);
+          return false;
+        }
+
+        setProgress(`⏳ Processing... (${data.state || 'IN_PROGRESS'})`);
+
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        attempts++;
+
+      } catch (error) {
+        console.error("Polling error:", error);
+        setLogs(prev => [...prev, `Polling error: ${error.message}`]);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        attempts++;
+      }
+    }
+
+    setLogs(prev => [...prev, 'Timeout: Generation took too long']);
+    return false;
+  };
+
   const generateVideo = async () => {
     if (!image || !video) {
       alert("Please upload both an image and a video.");
@@ -28,38 +75,72 @@ function App() {
     setLoading(true);
     setLogs([]);
     setResult(null);
+    setProgress('');
 
     const formData = new FormData();
     formData.append('image', image);
     formData.append('video', video);
 
     try {
-      const response = await fetch('http://localhost:3000/api/generate', {
+      setProgress('📤 Uploading files...');
+      setLogs(prev => [...prev, 'Uploading image and video...']);
+
+      const uploadResponse = await fetch('http://localhost:3000/api/upload', {
         method: 'POST',
         body: formData,
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP error! status: ${response.status}`);
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json();
+        throw new Error(errorData.error || `Upload failed with status: ${uploadResponse.status}`);
       }
 
-      console.log("Response data:", data);
+      const uploadData = await uploadResponse.json();
+      console.log("Upload response:", uploadData);
 
-      if (data.data && data.data.video && data.data.video.url) {
-        setResult(data.data.video.url);
-      } else {
-        setLogs(prev => [...prev, "Warning: Video URL not found in response immediately. Check console."]);
+      const { image_url, video_url } = uploadData;
+
+      if (!image_url || !video_url) {
+        throw new Error('Failed to get storage URLs from upload');
       }
+
+      setProgress('🚀 Submitting to generation queue...');
+      setLogs(prev => [...prev, 'Files uploaded, submitting generation job...']);
+
+      const queueResponse = await fetch('http://localhost:3000/api/generate-from-urls', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image_url,
+          video_url,
+          character_orientation: 'video'
+        }),
+      });
+
+      if (!queueResponse.ok) {
+        const errorData = await queueResponse.json();
+        throw new Error(errorData.error || `Queue submission failed`);
+      }
+
+      const queueData = await queueResponse.json();
+      console.log("Queue response:", queueData);
+
+      if (!queueData.request_id) {
+        throw new Error('No request_id received from server');
+      }
+
+      setLogs(prev => [...prev, `Job queued with ID: ${queueData.request_id}`]);
+
+      setProgress('⏳ Generating video...');
+      await pollJobStatus(queueData.request_id);
 
     } catch (error) {
       console.error("Error:", error);
       const errorMessage = error.message || 'Unknown error occurred';
       setLogs(prev => [...prev, `Error: ${errorMessage}`]);
-      if (errorMessage.includes('timeout') || errorMessage.includes('fetch failed')) {
-        setLogs(prev => [...prev, 'This might be a network connectivity issue. Please check your internet connection and firewall settings.']);
-      }
+      setProgress('');
     } finally {
       setLoading(false);
     }
@@ -144,6 +225,10 @@ function App() {
               </span>
             ) : 'Generate Video'}
           </button>
+
+          {progress && (
+            <p className="mt-4 text-lg text-purple-300 font-medium">{progress}</p>
+          )}
         </div>
 
         {/* Results Section */}
