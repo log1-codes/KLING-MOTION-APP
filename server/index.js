@@ -79,7 +79,7 @@ app.post('/api/generate-from-urls', async (req, res) => {
             return res.status(500).json({ error: 'FAL_KEY not configured on server' });
         }
 
-        const { image_url, video_url, character_orientation } = req.body;
+        const { image_url, video_url, character_orientation, prompt } = req.body;
 
         if (!image_url || !video_url) {
             return res.status(400).json({
@@ -90,12 +90,13 @@ app.post('/api/generate-from-urls', async (req, res) => {
         console.log('Submitting job to FAL queue...');
 
         const submission = await fal.queue.submit(
-            'fal-ai/kling-video/v2.6/standard/motion-control',
+            'fal-ai/wan/v2.2-14b/animate/replace',
             {
                 input: {
                     image_url,
                     video_url,
                     character_orientation: character_orientation || 'video',
+                    prompt: prompt || ''
                 },
             }
         );
@@ -121,7 +122,7 @@ app.get('/api/job-status/:requestId', async (req, res) => {
 
         console.log("Polling requestId:", requestId);
 
-        const status = await fal.queue.status('fal-ai/kling-video/v2.6/standard/motion-control', {
+        const status = await fal.queue.status('fal-ai/wan/v2.2-14b/animate/replace', {
             requestId: requestId,
             logs: true
         });

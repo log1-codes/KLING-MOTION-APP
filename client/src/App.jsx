@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 function App() {
   const [image, setImage] = useState(null);
   const [video, setVideo] = useState(null);
+  const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -115,6 +116,7 @@ function App() {
         body: JSON.stringify({
           image_url,
           video_url,
+          prompt,
           character_orientation: 'video'
         }),
       });
@@ -205,6 +207,19 @@ function App() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+
+        {/* Prompt Input */}
+        <div className="mb-8">
+          <div className="bg-gray-800 p-6 rounded-2xl border border-gray-700 shadow-lg hover:border-blue-500 transition-colors">
+            <h2 className="text-xl font-semibold mb-4 text-blue-300">3. Text Prompt (Optional)</h2>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="Describe how you want the character to move or any specific details..."
+              className="w-full bg-gray-900 text-white border border-gray-600 rounded-lg p-4 focus:outline-none focus:border-blue-500 h-32 resize-none"
+            />
           </div>
         </div>
 
