@@ -4,7 +4,6 @@ const multer = require('multer');
 const { fal } = require('@fal-ai/client');
 require('dotenv').config();
 
-
 if (!process.env.FAL_KEY) {
     console.warn('⚠️  FAL_KEY not set in environment');
 } else {
@@ -12,7 +11,6 @@ if (!process.env.FAL_KEY) {
         credentials: process.env.FAL_KEY,
     });
 }
-
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -23,11 +21,9 @@ app.use(express.json());
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
-
 
 app.post(
     '/api/upload',
@@ -71,8 +67,6 @@ app.post(
     }
 );
 
-
-
 app.post('/api/generate-from-urls', async (req, res) => {
     try {
         if (!process.env.FAL_KEY) {
@@ -86,9 +80,10 @@ app.post('/api/generate-from-urls', async (req, res) => {
                 error: 'Both image_url and video_url are required',
             });
         }
-        const WEBHOOK_URL = 'https://handsomest-lanny-provocative.ngrok-free.dev/api/webhook';
 
-        console.log('Submitting job to FAL queue...');
+        const WEBHOOK_URL = process.env.WEBHOOK_URL ;
+        
+        console.log('Submitting job to FAL queue with webhook:', WEBHOOK_URL);
 
         const submission = await fal.queue.submit(
             'fal-ai/wan/v2.2-14b/animate/replace',
@@ -103,6 +98,8 @@ app.post('/api/generate-from-urls', async (req, res) => {
             }
         );
 
+        console.log('Job submitted with request_id:', submission.request_id);
+
         res.json({
             request_id: submission.request_id,
             message: 'job started',
@@ -115,72 +112,132 @@ app.post('/api/generate-from-urls', async (req, res) => {
     }
 });
 
-
 // Store connected clients: requestId -> response object
 const clients = new Map();
 
 // SSE Endpoint for real-time updates
 app.get('/api/events/:requestId', (req, res) => {
-    const requestId = req.params.requestId;
-    console.log(`Client connected for updates: ${requestId}`);
-
-    // Set headers for SSE
+    const { requestId } = req.params;
+    
+    console.log('SSE client connected for request:', requestId);
+    
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); 
+    res.flushHeaders();
 
-    // Store the client connection
     clients.set(requestId, res);
-
-    // Send initial connection message
     res.write(`data: ${JSON.stringify({ status: 'CONNECTED' })}\n\n`);
 
-    // Remove client when connection closes
     req.on('close', () => {
-        console.log(`Client disconnected: ${requestId}`);
+        console.log('SSE client disconnected for request:', requestId);
         clients.delete(requestId);
     });
 });
 
+
+// Webhook endpoint to receive updates from FAL
 app.post('/api/webhook', (req, res) => {
-    const data = req.body;
-    console.log("FAL SENT DATA:", JSON.stringify(data, null, 2));
-
-    const requestId = data.request_id;
-    const client = clients.get(requestId);
-
-    if (client) {
-        if (data.status === 'COMPLETED' || data.status === 'OK') {
-            const videoUrl = data.payload.video.url;
-            console.log("SUCCESS! Video is at:", videoUrl);
-
-            client.write(`data: ${JSON.stringify({
-                state: 'COMPLETED',
-                video: { url: videoUrl },
-                metrics: data.metrics
-            })}\n\n`);
-        } else if (data.status === 'IN_PROGRESS' || data.status === 'QUEUED') {
-            client.write(`data: ${JSON.stringify({
-                state: data.status,
-                logs: data.logs
-            })}\n\n`);
-        } else if (data.status === 'FAILED' || data.status === 'ERROR') {
-            client.write(`data: ${JSON.stringify({
-                state: 'FAILED',
-                error: data.error
-            })}\n\n`);
+    try {
+        console.log('=== WEBHOOK RECEIVED ===');
+        console.log('Full webhook body:', JSON.stringify(req.body, null, 2));
+        
+        const data = req.body;
+        
+        const requestId = data.request_id || data.requestId || data.id || data.gateway_request_id;
+        
+        const status = data.status || data.state;
+        
+        const payload = data.payload || data.output || data.result;
+        
+        const error = data.error || data.error_message;
+        
+        console.log('Extracted data:');
+        console.log('- Request ID:', requestId);
+        console.log('- Status:', status);
+        console.log('- Has Payload:', !!payload);
+        console.log('- Has Video in Payload:', !!(payload && payload.video));
+        
+        if (!requestId) {
+            console.error(' No request_id found in webhook data');
+            return res.status(400).json({ error: 'Missing request_id' });
         }
-    } else {
-        console.log(`No active client found for request ${requestId}`);
-    }
 
-    // You MUST send a 200 status back so Fal knows you got the message
-    res.status(200).send('Received');
+        const client = clients.get(requestId);
+
+        if (client) {
+            console.log(' Found connected client for request:', requestId);
+            
+            if (status === 'OK' && payload && payload.video) {
+                const videoUrl = payload.video.url || payload.video;
+                
+                console.log('Job completed! Video URL:', videoUrl);
+                console.log('Sending completion to client...');
+                
+                client.write(`data: ${JSON.stringify({ 
+                    state: 'COMPLETED', 
+                    video: { url: videoUrl },
+                    payload: payload
+                })}\n\n`);
+                
+                console.log('✅ Completion message sent to client');
+            } 
+            else if (status === 'COMPLETED' || status === 'completed') {
+                const videoUrl = payload?.video?.url || payload?.video || data.video?.url;
+                
+                if (videoUrl) {
+                    console.log('Job completed (COMPLETED status)! Video URL:', videoUrl);
+                    client.write(`data: ${JSON.stringify({ 
+                        state: 'COMPLETED', 
+                        video: { url: videoUrl } 
+                    })}\n\n`);
+                } else {
+                    console.error(' COMPLETED but no video URL found');
+                    client.write(`data: ${JSON.stringify({ 
+                        state: 'FAILED', 
+                        error: 'Video URL not found in response' 
+                    })}\n\n`);
+                }
+            } 
+            else if (status === 'ERROR' || status === 'FAILED' || status === 'failed' || status === 'error') {
+                console.log(' Job failed:', error);
+                client.write(`data: ${JSON.stringify({ 
+                    state: 'FAILED', 
+                    error: error || 'Generation failed' 
+                })}\n\n`);
+            } 
+            else if (status === 'IN_PROGRESS' || status === 'in_progress' || status === 'QUEUED' || status === 'queued') {
+                console.log('⏳ Job in progress');
+                client.write(`data: ${JSON.stringify({ 
+                    state: status.toUpperCase() 
+                })}\n\n`);
+            } 
+            else {
+                console.log('ℹ️ Other status:', status);
+                client.write(`data: ${JSON.stringify({ 
+                    state: status,
+                    rawData: data
+                })}\n\n`);
+            }
+        } else {
+            console.log('⚠️ No connected client found for request:', requestId);
+            console.log('Active clients:', Array.from(clients.keys()));
+        }
+        
+        res.status(200).send('OK');
+        console.log('=== WEBHOOK PROCESSED ===\n');
+    } catch (error) {
+        console.error('Webhook processing error:', error);
+        res.status(500).json({ error: 'Webhook processing failed' });
+    }
 });
 
-
 const server = app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
+    console.log(`Server running on port ${port}`);
+    console.log(`Webhook endpoint: http://localhost:${port}/api/webhook`);
+    console.log(`For ngrok: ngrok http ${port}`);
+    console.log(`Set WEBHOOK_URL in .env to your ngrok URL`);
 });
 
 server.setTimeout(10 * 60 * 1000);

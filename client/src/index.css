@@ -1,1 +1,90 @@
 @import "tailwindcss";
+
+@theme {
+    /* Behooked & Higgsfield Color Palette */
+    --color-primary-blue: #0066FF;
+    --color-neon-green: #CCFF00;
+    --color-card-bg: rgba(10, 10, 10, 0.8);
+    --color-card-border: rgba(255, 255, 255, 0.05);
+
+    /* Animations for AI generation states */
+    --animate-ai-glow: pulse-glow 2s ease-in-out infinite;
+
+    @keyframes pulse-glow {
+
+        0%,
+        100% {
+            opacity: 0.5;
+        }
+
+        50% {
+            opacity: 1;
+            transform: scale(1.05);
+        }
+    }
+}
+
+/* Global Base Styles */
+@layer base {
+    body {
+        background-color: black;
+        color: white;
+        -webkit-font-smoothing: antialiased;
+        font-family: 'Inter', system-ui, sans-serif;
+    }
+
+    /* Custom Scrollbar for Dark Theme */
+    ::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: black;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: #27272a;
+        /* zinc-800 */
+        border-radius: 9999px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: #3f3f46;
+        /* zinc-700 */
+    }
+}
+
+/* Behooked & Higgsfield Component Styles */
+@layer components {
+
+    /* Glassmorphism Effect for Navbars/Cards */
+    .glass-effect {
+        backdrop-filter: blur(20px);
+        background-color: rgba(0, 0, 0, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* Neon Glow Button */
+    .btn-neon {
+        background-color: var(--color-neon-green);
+        color: black;
+        font-weight: 700;
+        padding: 0.75rem 1.5rem;
+        border-radius: 0.75rem;
+        text-transform: uppercase;
+        transition: all 0.2s;
+        cursor: pointer;
+    }
+
+    .btn-neon:hover {
+        box-shadow: 0 0 20px rgba(204, 255, 0, 0.4);
+        transform: scale(1.02);
+    }
+
+    /* Main Background Glow */
+    .radial-glow {
+        background: radial-gradient(circle at 50% -20%,
+                rgba(0, 102, 255, 0.15) 0%,
+                rgba(0, 0, 0, 0) 70%);
+    }
+}
